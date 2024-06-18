@@ -1,0 +1,43 @@
+{
+  "command": ["renew","--dns-route53", "--agree-tos","--non-interactive"],
+  "image": "certbot/dns-route53:latest",
+  "fargatePlatformConfiguration": {
+    "platformVersion": "1.4.0"
+  },
+  "resourceRequirements": [
+    {"type": "VCPU", "value": "2"},
+    {"type": "MEMORY", "value": "4096"}
+  ],
+  "jobRoleArn": "${JOB_ROLE}",
+  "executionRoleArn": "${EXECUTION_ROLE}",
+  "networkConfiguration": { 
+    "assignPublicIp": "ENABLED"
+  },
+  "volumes": [ 
+    { 
+        "efsVolumeConfiguration": { 
+          "fileSystemId": "EFS_ID",
+          "rootDirectory": "/"
+        },
+        "host": null,
+        "name": "${EFS_NAME}"
+    }
+  ],
+  "mountPoints": [ 
+    { 
+      "containerPath": "/etc/letsencrypt",
+      "readOnly": null,
+      "sourceVolume": "${EFS_NAME}"
+    }
+  ],
+  "secrets": [ 
+    { 
+      "name": "AWS_ACCESS_KEY_ID",
+      "valueFrom": "arn:aws:ssm:us-east-1:AWS_ACC_ID:parameter/certbot_batch/access_key"
+    },
+    { 
+      "name": "AWS_SECRET_ACCESS_KEY",
+      "valueFrom": "arn:aws:ssm:us-east-1:AWS_ACC_ID:parameter/certbot_batch/secret_key"
+    }
+ ]
+}

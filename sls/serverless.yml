@@ -1,0 +1,118 @@
+service: sls-cw
+
+# To deploy the service:
+# serverless deploy --stage dev
+# serverless deploy --stage prod
+
+package:
+  exclude:
+    - node_modules/**
+    - package-lock.json
+
+provider:
+  name: aws
+  runtime: python3.8
+
+  stage: ${opt:stage, 'dev'}
+
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+            - "logs:CreateLogGroup"
+            - "logs:DeleteLogGroup"
+            - "s3:PutObject"
+            - "ssm:SendCommand"
+            - "ssm:GetCommandInvocation"
+          Resource: "*"
+      managedPolicies:
+        - arn:aws:iam::aws:policy/AmazonElasticFileSystemClientFullAccess
+
+custom:
+  schedule:
+    dev: cron(0 0 31 2 ? *)
+    prod: cron(0 7 ? * SAT *)
+
+functions:
+  check-cert-expiration:
+    handler: src/check_cert_date.lambda_handler
+    timeout: 60
+  copy-to-s3:
+    handler: src/copy_to_s3.lambda_handler
+    timeout: 120
+    vpc:
+      securityGroupIds:
+        - SG_ID #PROD-EFS-SG
+      subnetIds:
+        - SUBNET_ID #prod vpc
+    fileSystemConfig:
+      localMountPath: /mnt/efs
+      arn: arn:aws:elasticfilesystem:us-east-1:AWS_ACC_ID:access-point/EFS_ACCESS_POINT_ARN
+  get-from-s3:
+    handler: src/get_cert_from_s3.lambda_handler
+    timeout: 180
+  restart-httpd:
+    handler: src/restart_httpd.lambda_handler
+    timeout: 300
+
+stepFunctions:
+  stateMachines:
+    ReviewCertificate:
+      events:
+        - schedule: ${self:custom.schedule.${opt:stage}}
+      name: ${opt:stage}-ReviewCertificate
+      definition:
+        StartAt: CheckCertificate
+        States:
+          CheckCertificate:
+            Type: Task
+            Resource:
+              "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${opt:stage}-check-cert-expiration"
+            Next: ChoiceDaysLeft
+          ChoiceDaysLeft:
+            Type: Choice
+            Choices:
+            - Variable: "$.DaysLeft"
+              NumericLessThan: 30
+              Next: RenewCertificates
+            - Variable: "$.DaysLeft"
+              NumericGreaterThanEquals: 30
+              Next: ListCertificates
+          RenewCertificates:
+            Type: Task
+            Resource: "arn:aws:states:::batch:submitJob.sync"
+            Parameters:
+              JobDefinition: "arn:aws:batch:us-east-1:AWS_ACC_ID:job-definition/renew_certs_job_definition:6"
+              JobName: "renew-certs-sls"
+              JobQueue: "arn:aws:batch:us-east-1:AWS_ACC_ID:job-queue/prod-cert-job-queue"
+            Next: CopyToS3
+          CopyToS3:
+            Type: Task
+            Resource:
+              "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${opt:stage}-copy-to-s3"
+            Next: GetFromS3
+          GetFromS3:
+            Type: Task
+            Resource:
+              "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${opt:stage}-get-from-s3"
+            Next: RestartService
+          RestartService:
+            Type: Task
+            Resource:
+              "arn:aws:lambda:${aws:region}:${aws:accountId}:function:${self:service}-${opt:stage}-restart-httpd"
+            Next: ListCertificates
+          ListCertificates:
+            Type: Task
+            Resource: "arn:aws:states:::batch:submitJob.sync"
+            Parameters:
+              JobDefinition: "arn:aws:batch:us-east-1:AWS_ACC_ID:job-definition/list_certs_job_definition:1"
+              JobName: "list-certs-sls"
+              JobQueue: "arn:aws:batch:us-east-1:AWS_ACC_ID:job-queue/prod-cert-job-queue"
+            End: True
+          
+
+plugins:
+  - serverless-step-functions

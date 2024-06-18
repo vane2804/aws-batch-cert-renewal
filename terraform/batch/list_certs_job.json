@@ -1,0 +1,33 @@
+{
+  "command": ["certificates","--non-interactive"],
+  "image": "certbot/dns-route53:latest",
+  "fargatePlatformConfiguration": {
+    "platformVersion": "1.4.0"
+  },
+  "resourceRequirements": [
+    {"type": "VCPU", "value": "1"},
+    {"type": "MEMORY", "value": "2048"}
+  ],
+  "jobRoleArn": "${JOB_ROLE}",
+  "executionRoleArn": "${EXECUTION_ROLE}",
+  "networkConfiguration": { 
+    "assignPublicIp": "ENABLED"
+  },
+  "volumes": [ 
+    { 
+        "efsVolumeConfiguration": { 
+          "fileSystemId": "EFS_ID",
+          "rootDirectory": "/"
+        },
+        "host": null,
+        "name": "${EFS_NAME}"
+    }
+  ],
+  "mountPoints": [ 
+    { 
+      "containerPath": "/etc/letsencrypt",
+      "readOnly": null,
+      "sourceVolume": "${EFS_NAME}"
+    }
+  ]
+}
